@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, ChangeEvent } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Plus, Camera, Image as ImageIcon, X } from 'lucide-react';
 import { clsx } from 'clsx';
+import { supabase } from '../db';
 
 export default function ProgressPage() {
   const [logs, setLogs] = useState<any[]>([]);
@@ -16,18 +17,16 @@ export default function ProgressPage() {
     if (userId) {
       try {
         const [logsRes, userRes] = await Promise.all([
-          fetch(`/api/progress/${userId}`),
-          fetch(`/api/users/${userId}`)
+          supabase.from('progress_logs').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
+          supabase.from('users').select('*').eq('id', userId).single()
         ]);
         
-        if (logsRes.ok) {
-          const logsData = await logsRes.json();
-          setLogs(logsData);
+        if (logsRes.data) {
+          setLogs(logsRes.data);
         }
         
-        if (userRes.ok) {
-          const userData = await userRes.json();
-          setUser(userData);
+        if (userRes.data) {
+          setUser(userRes.data);
         }
       } catch (error) {
         console.error("Failed to fetch data", error);
@@ -53,26 +52,17 @@ export default function ProgressPage() {
   const handleAddLog = async () => {
     if (!newWeight || !userId) return;
     
-    await fetch('/api/progress', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            userId,
-            weight: parseFloat(newWeight),
-            measurements: {}, // Placeholder for now
-            photo: newPhoto
-        })
-    });
+    await supabase.from('progress_logs').insert([{
+        user_id: userId,
+        weight: parseFloat(newWeight),
+        measurements: {}, // Placeholder for now
+        photo: newPhoto
+    }]);
     
     // Also update current weight in user profile
-    await fetch(`/api/users/${userId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            ...user,
-            weight: parseFloat(newWeight)
-        })
-    });
+    await supabase.from('users').update({
+        weight: parseFloat(newWeight)
+    }).eq('id', userId);
     
     setShowModal(false);
     setNewWeight('');

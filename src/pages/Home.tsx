@@ -3,6 +3,8 @@ import { motion } from 'motion/react';
 import { Dumbbell, Flame, Trophy, AlertCircle, Settings, Activity, Scale, Percent, MessageCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import LoadingScreen from '../components/LoadingScreen';
+import { supabase } from '../db';
+import { generateAvatar, generateMotivation } from '../lib/gemini';
 
 import { toast } from 'sonner';
  
@@ -14,27 +16,25 @@ function BodyAvatar({ user, onAvatarGenerated }: { user: any, onAvatarGenerated:
   const handleGenerateAvatar = async () => {
     try {
       setGenerating(true);
-      const res = await fetch(`/api/users/${user.id}/avatar`, { method: 'POST' });
-      if (res.ok) {
-        toast.success('Avatar gerado com sucesso!');
-        onAvatarGenerated();
+      const avatarUrl = await generateAvatar(user);
+      const { error } = await supabase.from('users').update({ avatar_url: avatarUrl }).eq('id', user.id);
+      if (error) throw error;
+      
+      toast.success('Avatar gerado com sucesso!');
+      onAvatarGenerated();
+    } catch (err: any) {
+      if (err.message?.includes('429') || err.message?.includes('Quota')) {
+        toast.error('Limite de geração atingido.', {
+          description: 'Você pode configurar sua própria chave de API no menu lateral para continuar gerando imagens em alta qualidade.',
+          duration: 8000,
+          action: {
+            label: 'Tentar novamente',
+            onClick: () => handleGenerateAvatar(),
+          },
+        });
       } else {
-        const data = await res.json();
-        if (res.status === 429) {
-          toast.error(data.error || 'Limite de geração atingido.', {
-            description: data.details || 'Você pode configurar sua própria chave de API no menu lateral para continuar gerando imagens em alta qualidade.',
-            duration: 8000,
-            action: {
-              label: 'Tentar novamente',
-              onClick: () => handleGenerateAvatar(),
-            },
-          });
-        } else {
-          toast.error(data.error || 'Erro ao gerar avatar');
-        }
+        toast.error('Erro ao gerar avatar');
       }
-    } catch (err) {
-      toast.error('Erro de conexão ao gerar avatar');
     } finally {
       setGenerating(false);
     }
@@ -197,34 +197,48 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
     const loadData = async () => {
       try {
         // Fetch user
-        const userRes = await fetch(`/api/users/${userId}`);
-        if (!userRes.ok) throw new Error('Falha ao carregar perfil');
-        const userData = await userRes.json();
+        const { data: userData, error: userError } = await supabase.from('users').select('*').eq('id', userId).single();
+        if (userError || !userData) throw new Error('Falha ao carregar perfil');
         setUser(userData);
 
         // Fetch stats
         try {
-            const statsRes = await fetch(`/api/stats/${userId}`);
-            if (statsRes.ok) {
-                const statsData = await statsRes.json();
-                setStats(statsData);
-            }
+            const now = new Date();
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+            const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString();
+            
+            const { count } = await supabase.from('workout_history')
+                .select('*', { count: 'exact', head: true })
+                .eq('user_id', userId)
+                .gte('completed_at', startOfMonth)
+                .lte('completed_at', endOfMonth);
+            
+            setStats({ workoutsCompletedMonth: count || 0 });
         } catch (e) {
             console.error("Stats error", e);
         }
 
-        // Fetch motivation (non-blocking for UI, but we wait here for simplicity or use Promise.all)
-        // We wrap motivation in its own try/catch so it doesn't block the whole page if AI fails
+        // Fetch motivation
         try {
             const cachedMotiv = sessionStorage.getItem(`motivation_${userId}`);
             if (cachedMotiv) {
                 setMotivation(cachedMotiv);
             } else {
-                const motivRes = await fetch(`/api/motivation/${userId}`);
-                if (motivRes.ok) {
-                    const motivData = await motivRes.json();
-                    setMotivation(motivData.message);
-                    sessionStorage.setItem(`motivation_${userId}`, motivData.message);
+                const today = new Date().toISOString().split('T')[0];
+                const { data: cacheData } = await supabase.from('motivation_cache')
+                    .select('message')
+                    .eq('user_id', userId)
+                    .eq('date', today)
+                    .single();
+                
+                if (cacheData) {
+                    setMotivation(cacheData.message);
+                    sessionStorage.setItem(`motivation_${userId}`, cacheData.message);
+                } else {
+                    const motivMsg = await generateMotivation(userData);
+                    await supabase.from('motivation_cache').upsert({ user_id: userId, date: today, message: motivMsg });
+                    setMotivation(motivMsg);
+                    sessionStorage.setItem(`motivation_${userId}`, motivMsg);
                 }
             }
         } catch (e) {
@@ -342,10 +356,9 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
 
               {/* Body Profile Section */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  <BodyAvatar user={user} onAvatarGenerated={async () => {
-                    const userRes = await fetch(`/api/users/${userId}`);
-                    if (userRes.ok) {
-                      const userData = await userRes.json();
+              <BodyAvatar user={user} onAvatarGenerated={async () => {
+                    const { data: userData } = await supabase.from('users').select('*').eq('id', userId).single();
+                    if (userData) {
                       setUser(userData);
                     }
                   }} />

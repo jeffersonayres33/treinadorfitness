@@ -5,6 +5,8 @@ import { useNavigate } from 'react-router-dom';
 import RestTimer from '../components/RestTimer';
 import LoadingScreen from '../components/LoadingScreen';
 import { getExerciseVideo } from '../data/exerciseVideos';
+import { supabase } from '../db';
+import { generateWorkout, generateMotivation } from '../lib/gemini';
 
 import { toast } from 'sonner';
  
@@ -35,14 +37,42 @@ export default function WorkoutPage() {
     const fetchWorkout = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`/api/workouts/${userId}?t=${Date.now()}`);
-            if (!res.ok) throw new Error('Falha ao buscar treino');
-            const data = await res.json();
+            const { data: workouts, error } = await supabase.from('workouts')
+                .select(`
+                    id, type, created_at,
+                    exercises (id, day, name, sets, reps, rest, video_url, instructions, muscles_worked, exercise_order)
+                `)
+                .eq('user_id', userId)
+                .order('created_at', { ascending: false })
+                .limit(1);
+
+            if (error) throw error;
             
-            if (data) {
-                setWorkout(data);
-                if (data.days && data.days.length > 0) {
-                    setSelectedDay(data.days[0].name);
+            if (workouts && workouts.length > 0) {
+                const w = workouts[0];
+                // Group exercises by day
+                const daysMap = new Map();
+                w.exercises.forEach((ex: any) => {
+                    if (!daysMap.has(ex.day)) {
+                        daysMap.set(ex.day, []);
+                    }
+                    daysMap.get(ex.day).push(ex);
+                });
+                
+                const days = Array.from(daysMap.entries()).map(([name, exercises]) => ({
+                    name,
+                    exercises: (exercises as any[]).sort((a: any, b: any) => a.exercise_order - b.exercise_order)
+                }));
+                
+                const formattedWorkout = {
+                    id: w.id,
+                    type: w.type,
+                    days
+                };
+                
+                setWorkout(formattedWorkout);
+                if (days.length > 0) {
+                    setSelectedDay(days[0].name);
                 }
             } else {
                 setWorkout(null);
@@ -81,17 +111,39 @@ export default function WorkoutPage() {
     setError('');
     
     try {
-        const genRes = await fetch('/api/workouts/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId }),
-        });
+        const { data: user, error: userError } = await supabase.from('users').select('*').eq('id', userId).single();
+        if (userError) throw userError;
+        if (!user) throw new Error('User not found');
         
-        if (!genRes.ok) {
-            const errData = await genRes.json();
-            throw new Error(errData.error || 'Falha na geração');
+        const workoutPlan = await generateWorkout(user);
+        
+        // Delete old workouts (cascade deletes exercises)
+        await supabase.from('workouts').delete().eq('user_id', userId);
+        
+        // Insert new workouts
+        for (const w of workoutPlan.workouts) {
+          const { data: workoutData, error: workoutError } = await supabase.from('workouts').insert([{
+            user_id: userId,
+            type: w.name
+          }]).select('id').single();
+          
+          if (workoutError) throw workoutError;
+          
+          const exercisesToInsert = w.exercises.map((e: any, index: number) => ({
+            workout_id: workoutData.id,
+            day: w.day,
+            name: e.name,
+            sets: e.sets,
+            reps: e.reps,
+            rest: e.rest,
+            instructions: e.instructions,
+            muscles_worked: e.muscles_worked,
+            exercise_order: index
+          }));
+          
+          await supabase.from('exercises').insert(exercisesToInsert);
         }
- 
+
         // Refresh local state instead of reloading page
         setGenerating(false);
         setRefreshKey(prev => prev + 1);
@@ -174,26 +226,21 @@ export default function WorkoutPage() {
 
     setFinishing(true);
     try {
-        const res = await fetch('/api/workouts/complete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                userId,
-                workoutId: workout.id,
-                dayName: selectedDay,
-                duration: 60
-            }),
-        });
+        const { error } = await supabase.from('workout_history').insert([{
+            user_id: userId,
+            workout_id: workout.id,
+            day_name: selectedDay,
+            duration_minutes: 60
+        }]);
 
-        if (res.ok) {
-            const data = await res.json();
-            setMotivationMessage(data.motivation || "Treino concluído com sucesso!");
-            setShowFinishConfirm(false);
-            setShowSuccessModal(true);
-        } else {
-            const err = await res.json();
-            throw new Error(err.error || 'Falha ao salvar histórico');
-        }
+        if (error) throw error;
+        
+        const { data: user } = await supabase.from('users').select('*').eq('id', userId).single();
+        const motivation = await generateMotivation(user);
+        
+        setMotivationMessage(motivation || "Treino concluído com sucesso!");
+        setShowFinishConfirm(false);
+        setShowSuccessModal(true);
     } catch (error: any) {
         console.error('Error in handleFinishWorkout:', error);
         alert(`Erro ao concluir treino: ${error.message}`);

@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { ChevronRight, Check } from 'lucide-react';
 import { clsx } from 'clsx';
+import { supabase } from '../db';
+import { generateWorkout } from '../lib/gemini';
 
 export default function OnboardingPage({ setUserId }: { setUserId: (id: string) => void }) {
   const navigate = useNavigate();
@@ -31,9 +33,10 @@ export default function OnboardingPage({ setUserId }: { setUserId: (id: string) 
   useEffect(() => {
     if (existingUserId) {
         setIsEditing(true);
-        fetch(`/api/users/${existingUserId}`)
-            .then(res => res.json())
-            .then(data => {
+        const loadUser = async () => {
+            try {
+                const { data, error } = await supabase.from('users').select('*').eq('id', existingUserId).single();
+                if (error) throw error;
                 if (data) {
                     setFormData({
                         name: data.name || '',
@@ -51,8 +54,11 @@ export default function OnboardingPage({ setUserId }: { setUserId: (id: string) 
                         focus_areas: typeof data.focus_areas === 'string' ? JSON.parse(data.focus_areas) : data.focus_areas || [],
                     });
                 }
-            })
-            .catch(err => console.error("Failed to load user data", err));
+            } catch (err) {
+                console.error("Failed to load user data", err);
+            }
+        };
+        loadUser();
     }
   }, [existingUserId]);
 
@@ -81,34 +87,59 @@ export default function OnboardingPage({ setUserId }: { setUserId: (id: string) 
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      const url = isEditing ? `/api/users/${existingUserId}` : '/api/users';
-      const method = isEditing ? 'PUT' : 'POST';
+      let userId = existingUserId;
       
-      const res = await fetch(url, {
-        method: method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
-      });
-      
-      const data = await res.json();
-      
-      if (res.ok) {
-        const id = isEditing ? existingUserId : data.id;
-        if (id) {
-            localStorage.setItem('userId', id.toString());
-            setUserId(id.toString());
-            
-            // Always regenerate workout on profile update to match new settings
-            await fetch('/api/workouts/generate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: id }),
-            });
-    
-            navigate('/');
-        }
+      const payload = {
+        ...formData,
+        availability: JSON.stringify(formData.availability),
+        focus_areas: JSON.stringify(formData.focus_areas)
+      };
+
+      if (isEditing) {
+        const { error } = await supabase.from('users').update(payload).eq('id', existingUserId);
+        if (error) throw error;
       } else {
-        throw new Error(data.error || 'Failed to save');
+        const { data, error } = await supabase.from('users').insert([payload]).select('id').single();
+        if (error) throw error;
+        userId = data.id;
+      }
+      
+      if (userId) {
+        localStorage.setItem('userId', userId.toString());
+        setUserId(userId.toString());
+        
+        // Generate workout
+        const { data: user } = await supabase.from('users').select('*').eq('id', userId).single();
+        const workoutPlan = await generateWorkout(user);
+        
+        // Delete old workouts
+        await supabase.from('workouts').delete().eq('user_id', userId);
+        
+        // Insert new workouts
+        for (const w of workoutPlan.workouts) {
+          const { data: workoutData, error: workoutError } = await supabase.from('workouts').insert([{
+            user_id: userId,
+            type: w.name
+          }]).select('id').single();
+          
+          if (workoutError) throw workoutError;
+          
+          const exercisesToInsert = w.exercises.map((e: any, index: number) => ({
+            workout_id: workoutData.id,
+            day: w.day,
+            name: e.name,
+            sets: e.sets,
+            reps: e.reps,
+            rest: e.rest,
+            instructions: e.instructions,
+            muscles_worked: e.muscles_worked,
+            exercise_order: index
+          }));
+          
+          await supabase.from('exercises').insert(exercisesToInsert);
+        }
+
+        navigate('/');
       }
     } catch (error) {
       console.error(error);

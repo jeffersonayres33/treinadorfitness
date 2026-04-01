@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Send, Bot, User } from 'lucide-react';
 import { motion } from 'motion/react';
 import clsx from 'clsx';
+import { supabase } from '../db';
+import { chatWithCoach } from '../lib/gemini';
 
 interface Message {
   id: number;
@@ -37,9 +39,15 @@ export function ChatPage() {
 
   const fetchMessages = async () => {
     try {
-      const response = await fetch(`/api/chat/${userId}`);
-      if (response.ok) {
-        const data = await response.json();
+      const { data, error } = await supabase
+        .from('chat_history')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+      
+      if (data) {
         setMessages(data);
         
         // If no messages, send an initial greeting from the coach
@@ -55,14 +63,28 @@ export function ChatPage() {
   const sendInitialGreeting = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/chat/${userId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: "Oi, coach! Estou pronto para começar." }),
-      });
-      if (response.ok) {
-        fetchMessages();
-      }
+      const { data: user } = await supabase.from('users').select('*').eq('id', userId).single();
+      if (!user) return;
+
+      const initialMessage = "Oi, coach! Estou pronto para começar.";
+      
+      // Save user message
+      await supabase.from('chat_history').insert([{
+        user_id: userId,
+        role: 'user',
+        content: initialMessage
+      }]);
+
+      const responseText = await chatWithCoach(user, [], initialMessage);
+
+      // Save coach message
+      await supabase.from('chat_history').insert([{
+        user_id: userId,
+        role: 'model',
+        content: responseText
+      }]);
+
+      fetchMessages();
     } catch (error) {
       console.error('Failed to send initial greeting:', error);
     } finally {
@@ -88,24 +110,32 @@ export function ChatPage() {
 
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/chat/${userId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage }),
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setMessages(prev => [...prev, {
-          id: Date.now() + 1,
-          role: 'model',
-          content: data.response,
-          created_at: new Date().toISOString()
-        }]);
-      } else {
-        // Revert optimistic update on error
-        setMessages(prev => prev.filter(m => m.id !== tempId));
-      }
+      const { data: user } = await supabase.from('users').select('*').eq('id', userId).single();
+      if (!user) return;
+
+      // Save user message
+      await supabase.from('chat_history').insert([{
+        user_id: userId,
+        role: 'user',
+        content: userMessage
+      }]);
+
+      const history = messages.map(m => ({ role: m.role, content: m.content }));
+      const responseText = await chatWithCoach(user, history, userMessage);
+
+      // Save coach message
+      await supabase.from('chat_history').insert([{
+        user_id: userId,
+        role: 'model',
+        content: responseText
+      }]);
+
+      setMessages(prev => [...prev, {
+        id: Date.now() + 1,
+        role: 'model',
+        content: responseText,
+        created_at: new Date().toISOString()
+      }]);
     } catch (error) {
       console.error('Failed to send message:', error);
       setMessages(prev => prev.filter(m => m.id !== tempId));

@@ -3,6 +3,7 @@ import { Home, Dumbbell, LineChart, History, Menu, X, MessageCircle, Settings } 
 import { clsx } from 'clsx';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { supabase } from './db';
 
 import { Toaster } from 'sonner';
  
@@ -139,13 +140,9 @@ function AppContent() {
       }
 
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const { data, error } = await supabase.from('users').select('id').eq('id', storedId).single();
         
-        const res = await fetch(`/api/users/${storedId}`, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        
-        if (res.ok) {
+        if (!error && data) {
           setUserId(storedId);
         } else {
           console.warn('User ID invalid or not found, resetting...');

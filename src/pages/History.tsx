@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Calendar, Clock, CheckCircle, ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { supabase } from '../db';
 
 interface WorkoutHistoryItem {
   id: number;
@@ -17,16 +18,40 @@ export default function HistoryPage() {
 
   useEffect(() => {
     if (userId) {
-      fetch(`/api/history/${userId}`)
-        .then(res => res.json())
-        .then(data => {
-          setHistory(data);
-          setLoading(false);
-        })
-        .catch(err => {
+      const fetchHistory = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('workout_history')
+            .select(`
+              id,
+              day_name,
+              completed_at,
+              duration_minutes,
+              workouts (type)
+            `)
+            .eq('user_id', userId)
+            .order('completed_at', { ascending: false });
+
+          if (error) throw error;
+          
+          if (data) {
+            const formattedData = data.map((item: any) => ({
+              id: item.id,
+              day_name: item.day_name,
+              completed_at: item.completed_at,
+              duration_minutes: item.duration_minutes,
+              workout_type: item.workouts?.type || null
+            }));
+            setHistory(formattedData);
+          }
+        } catch (err) {
           console.error(err);
+        } finally {
           setLoading(false);
-        });
+        }
+      };
+      
+      fetchHistory();
     }
   }, [userId]);
 
