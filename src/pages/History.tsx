@@ -14,23 +14,29 @@ interface WorkoutHistoryItem {
 export default function HistoryPage() {
   const [history, setHistory] = useState<WorkoutHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const userId = localStorage.getItem('userId');
 
   useEffect(() => {
-    if (userId) {
-      const fetchHistory = async () => {
-        try {
-          const { data, error } = await supabase
-            .from('workout_history')
-            .select(`
-              id,
-              day_name,
-              completed_at,
-              duration_minutes,
-              workouts (type)
-            `)
-            .eq('user_id', userId)
-            .order('completed_at', { ascending: false });
+    const fetchHistory = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const userId = session?.user?.id;
+        
+        if (!userId) {
+          setLoading(false);
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('workout_history')
+          .select(`
+            id,
+            day_name,
+            completed_at,
+            duration_minutes,
+            workouts (type)
+          `)
+          .eq('user_id', userId)
+          .order('completed_at', { ascending: false });
 
           if (error) throw error;
           
@@ -52,8 +58,7 @@ export default function HistoryPage() {
       };
       
       fetchHistory();
-    }
-  }, [userId]);
+  }, []);
 
   if (loading) {
     return (

@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, useLocation, Link, useNavigate } from 'react-router-dom';
-import { Home, Dumbbell, LineChart, History, Menu, X, MessageCircle, Settings } from 'lucide-react';
+import { Home, Dumbbell, LineChart, History, Menu, X, MessageCircle, Settings, LogOut } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -22,12 +22,19 @@ import OnboardingPage from './pages/Onboarding';
 import WorkoutPage from './pages/Workout';
 import ProgressPage from './pages/Progress';
 import HistoryPage from './pages/History';
-import { ChatPage } from './pages/Chat';
+import NutritionPage from './pages/Nutrition';
 import LoadingScreen from './components/LoadingScreen';
+import LoginPage from './pages/Login';
 
-function DrawerMenu({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+function DrawerMenu({ isOpen, onClose, setUserId }: { isOpen: boolean, onClose: () => void, setUserId: (id: string | null) => void }) {
   const location = useLocation();
   const isActive = (path: string) => location.pathname === path;
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUserId(null);
+    onClose();
+  };
 
   return (
     <AnimatePresence>
@@ -67,6 +74,10 @@ function DrawerMenu({ isOpen, onClose }: { isOpen: boolean, onClose: () => void 
                 <Dumbbell size={24} strokeWidth={isActive('/workout') ? 2.5 : 2} />
                 <span className="text-base">Treino</span>
               </Link>
+              <Link to="/nutrition" onClick={onClose} className={clsx("flex items-center gap-4 transition-colors px-4 py-4 rounded-xl", isActive('/nutrition') ? "text-blue-600 bg-blue-50 font-bold" : "text-gray-600 hover:text-gray-900 hover:bg-gray-50 font-medium")}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={isActive('/nutrition') ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-utensils"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>
+                <span className="text-base">Nutrição</span>
+              </Link>
               <Link to="/history" onClick={onClose} className={clsx("flex items-center gap-4 transition-colors px-4 py-4 rounded-xl", isActive('/history') ? "text-blue-600 bg-blue-50 font-bold" : "text-gray-600 hover:text-gray-900 hover:bg-gray-50 font-medium")}>
                 <History size={24} strokeWidth={isActive('/history') ? 2.5 : 2} />
                 <span className="text-base">Histórico</span>
@@ -75,12 +86,15 @@ function DrawerMenu({ isOpen, onClose }: { isOpen: boolean, onClose: () => void 
                 <LineChart size={24} strokeWidth={isActive('/progress') ? 2.5 : 2} />
                 <span className="text-base">Evolução</span>
               </Link>
-              <Link to="/chat" onClick={onClose} className={clsx("flex items-center gap-4 transition-colors px-4 py-4 rounded-xl", isActive('/chat') ? "text-blue-600 bg-blue-50 font-bold" : "text-gray-600 hover:text-gray-900 hover:bg-gray-50 font-medium")}>
-                <MessageCircle size={24} strokeWidth={isActive('/chat') ? 2.5 : 2} />
-                <span className="text-base">Coach AI</span>
-              </Link>
 
               <div className="mt-auto p-4 border-t border-gray-100">
+                <button 
+                  onClick={handleLogout}
+                  className="w-full flex items-center gap-4 text-red-600 hover:bg-red-50 transition-colors px-4 py-4 rounded-xl font-medium mb-2"
+                >
+                  <LogOut size={24} />
+                  <span className="text-base text-left">Sair</span>
+                </button>
                 <button 
                   onClick={async () => {
                     if (window.aistudio?.openSelectKey) {
@@ -131,34 +145,60 @@ function AppContent() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const checkUser = async () => {
-      const storedId = localStorage.getItem('userId');
-      
-      if (!storedId) {
-        setIsLoading(false);
-        return;
-      }
+    let mounted = true;
 
+    const checkSession = async (session: any) => {
       try {
-        const { data, error } = await supabase.from('users').select('id').eq('id', storedId).single();
+        const currentUserId = session?.user?.id || null;
+        if (mounted) setUserId(currentUserId);
         
-        if (!error && data) {
-          setUserId(storedId);
+        if (currentUserId) {
+          // Check if user has a profile
+          const { data: profile, error } = await supabase.from('users').select('id').eq('id', currentUserId).maybeSingle();
+          
+          if (error) {
+            console.error("Error fetching profile:", error);
+          }
+          
+          const isAuthPage = window.location.pathname.includes('/login');
+          const isOnboardingPage = window.location.pathname.includes('/onboarding');
+
+          if (!profile && !isOnboardingPage && mounted) {
+            navigate('/onboarding');
+          } else if (profile && isAuthPage && mounted) {
+            navigate('/');
+          }
         } else {
-          console.warn('User ID invalid or not found, resetting...');
-          localStorage.removeItem('userId');
-          setUserId(null);
+          // Not logged in
+          const isAuthPage = window.location.pathname.includes('/login');
+          const isOnboardingPage = window.location.pathname.includes('/onboarding');
+          
+          if (!isAuthPage && !isOnboardingPage && mounted) {
+            navigate('/login');
+          }
         }
-      } catch (error) {
-        console.error('Connection error:', error);
-        setUserId(storedId);
+      } catch (err) {
+        console.error("Auth state change error:", err);
       } finally {
-        setIsLoading(false);
+        if (mounted) setIsLoading(false);
       }
     };
 
-    checkUser();
-  }, []);
+    // Check initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      checkSession(session);
+    });
+
+    // Listen for changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      checkSession(session);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [navigate]);
 
   if (isLoading) return <LoadingScreen message="Iniciando..." />;
 
@@ -166,17 +206,18 @@ function AppContent() {
     <div className="min-h-screen bg-gray-50 font-sans text-gray-900 selection:bg-blue-100 flex flex-col">
       <Toaster position="top-center" richColors />
       {userId && <TopBar onMenuClick={() => setIsMenuOpen(true)} />}
-      {userId && <DrawerMenu isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} />}
+      {userId && <DrawerMenu isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} setUserId={setUserId} />}
       
       <div className="flex-1 overflow-y-auto w-full">
         <div className="max-w-5xl mx-auto w-full">
           <Routes>
-            <Route path="/" element={userId ? <HomePage setUserId={setUserId} /> : <OnboardingPage setUserId={setUserId} />} />
+            <Route path="/" element={userId ? <HomePage setUserId={setUserId} /> : <LoginPage setUserId={setUserId} />} />
+            <Route path="/login" element={<LoginPage setUserId={setUserId} />} />
             <Route path="/onboarding" element={<OnboardingPage setUserId={setUserId} />} />
-            <Route path="/workout" element={userId ? <WorkoutPage /> : <OnboardingPage setUserId={setUserId} />} />
-            <Route path="/history" element={userId ? <HistoryPage /> : <OnboardingPage setUserId={setUserId} />} />
-            <Route path="/progress" element={userId ? <ProgressPage /> : <OnboardingPage setUserId={setUserId} />} />
-            <Route path="/chat" element={userId ? <ChatPage /> : <OnboardingPage setUserId={setUserId} />} />
+            <Route path="/workout" element={userId ? <WorkoutPage /> : <LoginPage setUserId={setUserId} />} />
+            <Route path="/history" element={userId ? <HistoryPage /> : <LoginPage setUserId={setUserId} />} />
+            <Route path="/progress" element={userId ? <ProgressPage /> : <LoginPage setUserId={setUserId} />} />
+            <Route path="/nutrition" element={userId ? <NutritionPage /> : <LoginPage setUserId={setUserId} />} />
           </Routes>
         </div>
       </div>

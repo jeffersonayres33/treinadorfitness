@@ -3,15 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { ChevronRight, Check } from 'lucide-react';
 import { clsx } from 'clsx';
+import { toast } from 'sonner';
 import { supabase } from '../db';
 import { generateWorkout } from '../lib/gemini';
 
 export default function OnboardingPage({ setUserId }: { setUserId: (id: string) => void }) {
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
-  const existingUserId = localStorage.getItem('userId');
   
   const [formData, setFormData] = useState({
+    email: '',
+    password: '',
     name: '',
     birth_date: '',
     weight: '',
@@ -28,39 +30,49 @@ export default function OnboardingPage({ setUserId }: { setUserId: (id: string) 
   });
   const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [initialData, setInitialData] = useState<any>(null);
 
   // Load existing data if editing
   useEffect(() => {
-    if (existingUserId) {
-        setIsEditing(true);
-        const loadUser = async () => {
-            try {
-                const { data, error } = await supabase.from('users').select('*').eq('id', existingUserId).single();
-                if (error) throw error;
-                if (data) {
-                    setFormData({
-                        name: data.name || '',
-                        birth_date: data.birth_date || '',
-                        weight: data.weight || '',
-                        target_weight: data.target_weight || '',
-                        height: data.height || '',
-                        sex: data.sex || 'male',
-                        goal: data.goal || 'hypertrophy',
-                        experience: data.experience || 'beginner',
-                        constraints: data.constraints || '',
-                        availability: typeof data.availability === 'string' ? JSON.parse(data.availability) : data.availability || [],
-                        workout_duration: data.workout_duration || 60,
-                        equipment: data.equipment || 'gym',
-                        focus_areas: typeof data.focus_areas === 'string' ? JSON.parse(data.focus_areas) : data.focus_areas || [],
-                    });
-                }
-            } catch (err) {
-                console.error("Failed to load user data", err);
-            }
-        };
-        loadUser();
-    }
-  }, [existingUserId]);
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        setIsAuthenticated(true);
+        try {
+          const { data, error } = await supabase.from('users').select('*').eq('id', session.user.id).maybeSingle();
+          if (data) {
+            setIsEditing(true);
+            const loadedData = {
+              email: session.user.email || '',
+              password: '', // Don't load password
+              name: data.name || '',
+              birth_date: data.birth_date || '',
+              weight: data.weight || '',
+              target_weight: data.target_weight || '',
+              height: data.height || '',
+              sex: data.sex || 'male',
+              goal: data.goal || 'hypertrophy',
+              experience: data.experience || 'beginner',
+              constraints: data.constraints || '',
+              availability: typeof data.availability === 'string' ? JSON.parse(data.availability) : data.availability || [],
+              workout_duration: data.workout_duration || 60,
+              equipment: data.equipment || 'gym',
+              focus_areas: typeof data.focus_areas === 'string' ? JSON.parse(data.focus_areas) : data.focus_areas || [],
+            };
+            setFormData(loadedData);
+            setInitialData(loadedData);
+          } else {
+            setIsEditing(false);
+          }
+        } catch (err) {
+          console.error("Failed to load user data", err);
+          setIsEditing(false);
+        }
+      }
+    };
+    checkSession();
+  }, []);
 
   const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -87,69 +99,172 @@ export default function OnboardingPage({ setUserId }: { setUserId: (id: string) 
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      let userId = existingUserId;
+      let userId = '';
       
+      if (!isAuthenticated) {
+        if (!formData.email || !formData.password) {
+          toast.error('E-mail e senha são obrigatórios para criar uma conta.');
+          setLoading(false);
+          return;
+        }
+        if (formData.password.length < 6) {
+          toast.error('A senha deve ter pelo menos 6 caracteres.');
+          setLoading(false);
+          return;
+        }
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email: formData.email,
+          password: formData.password,
+        });
+        
+        let finalAuthData = authData;
+        
+        if (authError) {
+          const lowerMsg = authError.message.toLowerCase();
+          if (lowerMsg.includes('already registered') || lowerMsg.includes('user already exists')) {
+            // Try to sign in instead
+            const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+              email: formData.email,
+              password: formData.password,
+            });
+            
+            if (signInError) {
+              if (signInError.message.toLowerCase().includes('invalid login credentials')) {
+                throw new Error('Este e-mail já está em uso. A senha está incorreta. Tente entrar na sua conta.');
+              }
+              throw signInError;
+            }
+            finalAuthData = signInData;
+          } else if (lowerMsg.includes('invalid login credentials')) {
+            throw new Error('E-mail ou senha inválidos. Verifique e tente novamente.');
+          } else {
+            throw authError;
+          }
+        }
+        if (!finalAuthData.user) throw new Error('Falha ao criar usuário.');
+        
+        if (!finalAuthData.session) {
+          toast.success('Conta criada com sucesso! Por favor, verifique seu e-mail para confirmar a conta antes de continuar.');
+          navigate('/login');
+          setLoading(false);
+          return;
+        }
+        
+        setIsAuthenticated(true);
+        userId = finalAuthData.user.id;
+      } else {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.user) throw new Error('Sessão não encontrada.');
+        userId = session.user.id;
+      }
+
+      const { email, password, ...profileData } = formData;
       const payload = {
-        ...formData,
+        id: userId,
+        ...profileData,
+        birth_date: profileData.birth_date ? profileData.birth_date : null,
+        weight: profileData.weight ? parseFloat(profileData.weight) : null,
+        target_weight: profileData.target_weight ? parseFloat(profileData.target_weight) : null,
+        height: profileData.height ? parseFloat(profileData.height) : null,
         availability: JSON.stringify(formData.availability),
         focus_areas: JSON.stringify(formData.focus_areas)
       };
 
       if (isEditing) {
-        const { error } = await supabase.from('users').update(payload).eq('id', existingUserId);
+        const { error } = await supabase.from('users').update(payload).eq('id', userId);
         if (error) throw error;
       } else {
-        const { data, error } = await supabase.from('users').insert([payload]).select('id').single();
+        const { error } = await supabase.from('users').insert([payload]);
         if (error) throw error;
-        userId = data.id;
       }
       
       if (userId) {
-        localStorage.setItem('userId', userId.toString());
-        setUserId(userId.toString());
+        setUserId(userId);
         
-        // Generate workout
-        const { data: user } = await supabase.from('users').select('*').eq('id', userId).single();
-        const workoutPlan = await generateWorkout(user);
-        
-        // Delete old workouts
-        await supabase.from('workouts').delete().eq('user_id', userId);
-        
-        // Insert new workouts
-        for (const w of workoutPlan.workouts) {
+        let shouldRegenerate = true;
+        if (isEditing && initialData) {
+          const relevantFields = ['goal', 'experience', 'availability', 'workout_duration', 'equipment', 'focus_areas', 'constraints'];
+          const hasChanged = relevantFields.some(field => {
+            if (field === 'availability' || field === 'focus_areas') {
+              return JSON.stringify(formData[field as keyof typeof formData]) !== JSON.stringify(initialData[field]);
+            }
+            return formData[field as keyof typeof formData] !== initialData[field];
+          });
+          shouldRegenerate = hasChanged;
+        }
+
+        if (shouldRegenerate) {
+          // Generate workout
+          const workoutPlan = await generateWorkout(payload);
+          
+          if (!workoutPlan || !workoutPlan.workouts || !Array.isArray(workoutPlan.workouts)) {
+            throw new Error('O plano de treino gerado pela IA é inválido. Tente novamente.');
+          }
+
+          // Delete old workouts
+          await supabase.from('workouts').delete().eq('user_id', userId);
+          
+          // Insert new workout plan
           const { data: workoutData, error: workoutError } = await supabase.from('workouts').insert([{
             user_id: userId,
-            type: w.name
+            type: 'Plano de Treino Semanal'
           }]).select('id').single();
           
           if (workoutError) throw workoutError;
           
-          const exercisesToInsert = w.exercises.map((e: any, index: number) => ({
-            workout_id: workoutData.id,
-            day: w.day,
-            name: e.name,
-            sets: e.sets,
-            reps: e.reps,
-            rest: e.rest,
-            instructions: e.instructions,
-            muscles_worked: e.muscles_worked,
-            exercise_order: index
-          }));
+          const exercisesToInsert: any[] = [];
+          workoutPlan.workouts.forEach((w: any) => {
+            w.exercises.forEach((e: any, index: number) => {
+              exercisesToInsert.push({
+                workout_id: workoutData.id,
+                day: w.day,
+                name: e.name,
+                sets: e.sets,
+                reps: e.reps,
+                rest: e.rest,
+                instructions: e.instructions,
+                muscles_worked: e.muscles_worked,
+                exercise_order: index
+              });
+            });
+          });
           
           await supabase.from('exercises').insert(exercisesToInsert);
+          toast.success('Perfil e treino atualizados com sucesso!');
+        } else {
+          toast.success('Perfil atualizado com sucesso!');
         }
 
         navigate('/');
       }
-    } catch (error) {
-      console.error(error);
-      alert('Erro ao salvar perfil. Tente novamente.');
+    } catch (error: any) {
+      console.error('Onboarding Error:', error);
+      let errorMessage = error.message || 'Erro ao salvar perfil. Tente novamente.';
+      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('generateContent')) {
+        errorMessage = 'Erro ao gerar o treino com IA. Por favor, tente novamente mais tarde.';
+      } else if (errorMessage.includes('duplicate key value')) {
+        errorMessage = 'Este perfil já existe.';
+      }
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
-  const nextStep = () => setStep(s => s + 1);
+  const nextStep = () => {
+    if (step === 1 && !isAuthenticated) {
+      if (!formData.email || !formData.password || !formData.name) {
+        toast.error('Por favor, preencha o e-mail, senha e nome.');
+        return;
+      }
+    } else if (step === 1 && isAuthenticated) {
+      if (!formData.name) {
+        toast.error('Por favor, preencha o nome.');
+        return;
+      }
+    }
+    setStep(s => s + 1);
+  };
   const prevStep = () => setStep(s => s - 1);
 
   return (
@@ -160,7 +275,9 @@ export default function OnboardingPage({ setUserId }: { setUserId: (id: string) 
             animate={{ opacity: 1, y: 0 }}
             className="mb-8 md:mb-12"
         >
-            <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-2 md:mb-4">Vamos começar!</h1>
+            <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-2 md:mb-4">
+              {isEditing ? 'Editar Perfil' : 'Vamos começar!'}
+            </h1>
             <p className="text-gray-500 md:text-lg">Passo {step} de 5</p>
             <div className="w-full bg-gray-200 h-2 md:h-3 rounded-full mt-4 md:mt-6">
                 <div 
@@ -172,6 +289,18 @@ export default function OnboardingPage({ setUserId }: { setUserId: (id: string) 
 
         {step === 1 && (
           <motion.div initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="space-y-4 md:space-y-6">
+            {!isAuthenticated && (
+              <>
+                <div>
+                  <label className="block text-sm md:text-base font-medium text-gray-700 mb-1 md:mb-2">E-mail</label>
+                  <input type="email" name="email" value={formData.email} onChange={handleChange} className="w-full p-3 md:p-4 border rounded-xl md:rounded-2xl md:text-lg" placeholder="seu@email.com" />
+                </div>
+                <div>
+                  <label className="block text-sm md:text-base font-medium text-gray-700 mb-1 md:mb-2">Senha</label>
+                  <input type="password" name="password" value={formData.password} onChange={handleChange} className="w-full p-3 md:p-4 border rounded-xl md:rounded-2xl md:text-lg" placeholder="Sua senha" />
+                </div>
+              </>
+            )}
             <div>
               <label className="block text-sm md:text-base font-medium text-gray-700 mb-1 md:mb-2">Nome</label>
               <input name="name" value={formData.name} onChange={handleChange} className="w-full p-3 md:p-4 border rounded-xl md:rounded-2xl md:text-lg" placeholder="Seu nome" />
@@ -202,20 +331,15 @@ export default function OnboardingPage({ setUserId }: { setUserId: (id: string) 
                 </select>
             </div>
             <div className="flex gap-4 md:gap-6 mt-6 md:mt-8">
-                {isEditing && (
-                    <button 
-                        onClick={() => navigate('/')} 
-                        className="flex-1 p-4 md:p-5 text-red-600 font-medium md:text-lg bg-red-50 rounded-xl md:rounded-2xl hover:bg-red-100 transition-colors"
-                    >
-                        Cancelar
-                    </button>
-                )}
+                <button 
+                    onClick={() => navigate('/login')} 
+                    className="flex-1 p-4 md:p-5 text-gray-600 font-medium md:text-lg bg-gray-50 rounded-xl md:rounded-2xl hover:bg-gray-100 transition-colors"
+                >
+                    {isEditing ? 'Voltar' : 'Já tenho conta'}
+                </button>
                 <button 
                     onClick={nextStep} 
-                    className={clsx(
-                        "bg-blue-600 text-white p-4 md:p-5 rounded-xl md:rounded-2xl font-semibold md:text-lg flex items-center justify-center gap-2",
-                        isEditing ? "flex-1" : "w-full"
-                    )}
+                    className="flex-1 bg-blue-600 text-white p-4 md:p-5 rounded-xl md:rounded-2xl font-semibold md:text-lg flex items-center justify-center gap-2"
                 >
                     Próximo <ChevronRight size={20} className="md:w-6 md:h-6" />
                 </button>

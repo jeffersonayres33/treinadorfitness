@@ -5,26 +5,23 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export async function generateWorkout(user: any) {
   const prompt = `
-    You are an expert personal trainer. Create a weekly workout plan for the following user:
-    - Name: ${user.name}
-    - Goal: ${user.goal}
-    - Experience Level: ${user.experience}
-    - Availability: ${user.availability}
-    - Workout Duration: ${user.workout_duration} minutes
-    - Equipment Available: ${user.equipment}
-    - Focus Areas: ${user.focus_areas}
-    - Constraints/Injuries: ${user.constraints || 'None'}
-    
-    Return a JSON object with a "workouts" array. Each workout should have:
-    - "day": e.g., "Monday", "Wednesday"
-    - "name": e.g., "Upper Body Strength"
-    - "exercises": an array of objects with "name", "sets" (number), "reps" (string), "rest" (string), "instructions" (string), "muscles_worked" (string).
+    Crie um plano de treino semanal em JSON para:
+    - Nome: ${user.name}
+    - Objetivo: ${user.goal}
+    - Nível: ${user.experience}
+    - Disponibilidade: ${user.availability}
+    - Duração: ${user.workout_duration} min
+    - Equipamento: ${user.equipment}
+    - Foco: ${user.focus_areas}
+    - Restrições: ${user.constraints || 'Nenhuma'}
   `;
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: prompt,
     config: {
+      systemInstruction: "Você é um personal trainer de elite. Sua única função é gerar treinos estruturados em formato JSON estrito, sempre em Português do Brasil (pt-BR). Seja conciso nas instruções dos exercícios. Não inclua saudações, notas ou explicações fora do JSON.",
+      temperature: 0.4,
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -61,99 +58,92 @@ export async function generateWorkout(user: any) {
     },
   });
 
-  return JSON.parse(response.text || '{}');
+  try {
+    return JSON.parse(response.text || '{}');
+  } catch (error) {
+    console.error("Failed to parse Gemini response:", response.text);
+    throw new Error("Erro ao processar o treino gerado. Por favor, tente novamente.");
+  }
 }
 
-export async function generateMotivation(user: any) {
+export async function generateMealPlan(user: any, preferences: any) {
   const prompt = `
-    You are an encouraging and expert personal trainer. 
-    Write a short, highly motivating, personalized daily message (max 2 sentences) for your client:
-    - Name: ${user.name}
-    - Goal: ${user.goal}
-    - Experience: ${user.experience}
+    Crie um cardápio nutricional em JSON para:
+    - Objetivo: ${preferences.goal || user.goal}
+    - Tipo de Refeição: ${preferences.mealType} (ex: marmita congelada, fresca)
+    - Dias: ${preferences.days} dias
+    - Restrições: ${user.constraints || 'Nenhuma'}
+    - Peso atual: ${user.weight}kg
+    - Altura: ${user.height}m
     
-    Make it energetic and specific to their goal. Do not use hashtags.
+    Se o tipo for "marmita congelada" ou similar, inclua instruções de congelamento e tempo máximo de validade no freezer.
   `;
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: prompt,
-  });
-
-  return response.text || 'You can do this! Keep pushing towards your goals today!';
-}
-
-export async function generateAvatar(user: any) {
-  const prompt = `A stylized, energetic profile avatar for a fitness app user. 
-    They are focused on ${user.goal}. 
-    The style should be modern, clean, 3D illustration, vibrant colors, energetic vibe. 
-    No text in the image.`;
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.1-flash-image-preview',
-    contents: {
-      parts: [{ text: prompt }],
-    },
     config: {
-      imageConfig: {
-        aspectRatio: "1:1",
-        imageSize: "512px"
+      systemInstruction: "Você é um nutricionista de elite. Sua única função é gerar cardápios e listas de compras em formato JSON estrito, sempre em Português do Brasil (pt-BR). Não inclua saudações, notas ou explicações fora do JSON.",
+      temperature: 0.4,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          days: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                day: { type: Type.INTEGER },
+                meals: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      type: { type: Type.STRING, description: "Ex: Café da Manhã, Almoço" },
+                      name: { type: Type.STRING },
+                      ingredients: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      instructions: { type: Type.STRING },
+                      freezing_info: { type: Type.STRING, description: "Instruções de congelamento se aplicável" },
+                      macros: {
+                        type: Type.OBJECT,
+                        properties: {
+                          calories: { type: Type.INTEGER },
+                          protein: { type: Type.INTEGER },
+                          carbs: { type: Type.INTEGER },
+                          fat: { type: Type.INTEGER }
+                        }
+                      }
+                    },
+                    required: ['type', 'name', 'ingredients', 'instructions']
+                  }
+                }
+              },
+              required: ['day', 'meals']
+            }
+          },
+          shopping_list: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                item: { type: Type.STRING },
+                quantity: { type: Type.STRING },
+                category: { type: Type.STRING }
+              },
+              required: ['item', 'quantity', 'category']
+            }
+          }
+        },
+        required: ['days', 'shopping_list']
       }
     }
   });
 
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) {
-      return `data:image/png;base64,${part.inlineData.data}`;
-    }
+  try {
+    return JSON.parse(response.text || '{}');
+  } catch (error) {
+    console.error("Failed to parse Gemini response:", response.text);
+    throw new Error("Erro ao processar o cardápio gerado. Por favor, tente novamente.");
   }
-  
-  throw new Error('Failed to generate avatar');
-}
-
-export async function chatWithCoach(user: any, history: any[], message: string) {
-  const systemInstruction = `
-    You are an expert, motivating personal trainer named "Coach AI".
-    Your client is:
-    - Name: ${user.name}
-    - Goal: ${user.goal}
-    - Experience: ${user.experience}
-    - Constraints: ${user.constraints || 'None'}
-    
-    Provide concise, actionable, and encouraging fitness and nutrition advice.
-    Keep responses relatively short (1-3 paragraphs) as this is a chat interface.
-  `;
-
-  const chat = ai.chats.create({
-    model: 'gemini-3-flash-preview',
-    config: {
-      systemInstruction,
-    },
-  });
-
-  // Replay history (skip the first system-like message if needed, or just send all)
-  // Gemini chat expects alternating user/model messages. 
-  // For simplicity, we'll just send the latest message with context if history is complex, 
-  // or properly format the history.
-  
-  // Since we don't have a direct way to set history in ai.chats.create easily without formatting,
-  // we'll use generateContent with concatenated history for simplicity and robustness.
-  
-  const conversation = history.map(msg => `${msg.role === 'user' ? 'Client' : 'Coach'}: ${msg.content}`).join('\n');
-  const fullPrompt = `
-    ${systemInstruction}
-    
-    Previous conversation:
-    ${conversation}
-    
-    Client: ${message}
-    Coach:
-  `;
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: fullPrompt,
-  });
-
-  return response.text || 'I am here to help!';
 }

@@ -3,6 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Plus, Camera, Image as ImageIcon, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { supabase } from '../db';
+import { toast } from 'sonner';
 
 export default function ProgressPage() {
   const [logs, setLogs] = useState<any[]>([]);
@@ -11,32 +12,34 @@ export default function ProgressPage() {
   const [newWeight, setNewWeight] = useState('');
   const [newPhoto, setNewPhoto] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const userId = localStorage.getItem('userId');
 
   const fetchData = async () => {
-    if (userId) {
-      try {
-        const [logsRes, userRes] = await Promise.all([
-          supabase.from('progress_logs').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
-          supabase.from('users').select('*').eq('id', userId).single()
-        ]);
-        
-        if (logsRes.data) {
-          setLogs(logsRes.data);
-        }
-        
-        if (userRes.data) {
-          setUser(userRes.data);
-        }
-      } catch (error) {
-        console.error("Failed to fetch data", error);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      
+      if (!userId) return;
+
+      const [logsRes, userRes] = await Promise.all([
+        supabase.from('progress_logs').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
+        supabase.from('users').select('*').eq('id', userId).maybeSingle()
+      ]);
+      
+      if (logsRes.data) {
+        setLogs(logsRes.data);
       }
+      
+      if (userRes.data) {
+        setUser(userRes.data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch data", error);
     }
   };
 
   useEffect(() => {
     fetchData();
-  }, [userId]);
+  }, []);
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -50,24 +53,36 @@ export default function ProgressPage() {
   };
 
   const handleAddLog = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
     if (!newWeight || !userId) return;
     
-    await supabase.from('progress_logs').insert([{
+    const { error: insertError } = await supabase.from('progress_logs').insert([{
         user_id: userId,
         weight: parseFloat(newWeight),
-        measurements: {}, // Placeholder for now
         photo: newPhoto
     }]);
+
+    if (insertError) {
+        console.error("Error inserting log:", insertError);
+        toast.error("Erro ao salvar registro.");
+        return;
+    }
     
     // Also update current weight in user profile
-    await supabase.from('users').update({
+    const { error: updateError } = await supabase.from('users').update({
         weight: parseFloat(newWeight)
     }).eq('id', userId);
+
+    if (updateError) {
+        console.error("Error updating user weight:", updateError);
+    }
     
     setShowModal(false);
     setNewWeight('');
     setNewPhoto(null);
     fetchData();
+    toast.success("Registro adicionado com sucesso!");
   };
 
   // Filter logs that have photos
@@ -146,7 +161,7 @@ export default function ProgressPage() {
             <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={logs}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="date" tick={{fontSize: 12}} tickFormatter={(val) => new Date(val).toLocaleDateString('pt-BR', {day: '2-digit', month: '2-digit'})} />
+                    <XAxis dataKey="created_at" tick={{fontSize: 12}} tickFormatter={(val) => new Date(val).toLocaleDateString('pt-BR', {day: '2-digit', month: '2-digit'})} />
                     <YAxis domain={['dataMin - 2', 'dataMax + 2']} hide />
                     <Tooltip />
                     {user?.target_weight && (
@@ -178,7 +193,7 @@ export default function ProgressPage() {
                         </div>
                     )}
                     <span className="text-gray-600 text-sm md:text-base font-medium">
-                        {new Date(log.date).toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' })}
+                        {new Date(log.created_at).toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' })}
                     </span>
                 </div>
                 <span className="font-bold text-gray-900 md:text-lg">{log.weight} kg</span>

@@ -4,9 +4,8 @@ import { Play, Clock, RotateCcw, Youtube, Timer, AlertTriangle, RefreshCw, Video
 import { useNavigate } from 'react-router-dom';
 import RestTimer from '../components/RestTimer';
 import LoadingScreen from '../components/LoadingScreen';
-import { getExerciseVideo } from '../data/exerciseVideos';
 import { supabase } from '../db';
-import { generateWorkout, generateMotivation } from '../lib/gemini';
+import { generateWorkout } from '../lib/gemini';
 
 import { toast } from 'sonner';
  
@@ -22,25 +21,27 @@ export default function WorkoutPage() {
   const [expandedInstruction, setExpandedInstruction] = useState<number | null>(null);
   const [completedExercises, setCompletedExercises] = useState<Set<number>>(new Set());
   const [refreshKey, setRefreshKey] = useState(0);
-  const userId = localStorage.getItem('userId');
  
   useEffect(() => {
     setCompletedExercises(new Set());
   }, [selectedDay, refreshKey]);
  
   useEffect(() => {
-    if (!userId) {
-        setLoading(false);
-        return;
-    }
- 
     const fetchWorkout = async () => {
         setLoading(true);
         try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const userId = session?.user?.id;
+            
+            if (!userId) {
+                setLoading(false);
+                return;
+            }
+
             const { data: workouts, error } = await supabase.from('workouts')
                 .select(`
                     id, type, created_at,
-                    exercises (id, day, name, sets, reps, rest, video_url, instructions, muscles_worked, exercise_order)
+                    exercises (id, day, name, sets, reps, rest, instructions, muscles_worked, exercise_order)
                 `)
                 .eq('user_id', userId)
                 .order('created_at', { ascending: false })
@@ -86,7 +87,7 @@ export default function WorkoutPage() {
     };
  
     fetchWorkout();
-  }, [userId, refreshKey]);
+  }, [refreshKey]);
  
   const [generating, setGenerating] = useState(false);
   const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false);
@@ -96,11 +97,18 @@ export default function WorkoutPage() {
   const [motivationMessage, setMotivationMessage] = useState('');
  
   const handleRegenerateClick = () => {
-    setShowRegenerateConfirm(true);
+    if (!workout) {
+      confirmRegenerate();
+    } else {
+      setShowRegenerateConfirm(true);
+    }
   };
  
   const confirmRegenerate = async () => {
     setShowRegenerateConfirm(false);
+    
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
     
     if (!userId) {
         toast.error("Erro: Usuário não identificado.");
@@ -111,7 +119,7 @@ export default function WorkoutPage() {
     setError('');
     
     try {
-        const { data: user, error: userError } = await supabase.from('users').select('*').eq('id', userId).single();
+        const { data: user, error: userError } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
         if (userError) throw userError;
         if (!user) throw new Error('User not found');
         
@@ -120,29 +128,32 @@ export default function WorkoutPage() {
         // Delete old workouts (cascade deletes exercises)
         await supabase.from('workouts').delete().eq('user_id', userId);
         
-        // Insert new workouts
-        for (const w of workoutPlan.workouts) {
-          const { data: workoutData, error: workoutError } = await supabase.from('workouts').insert([{
-            user_id: userId,
-            type: w.name
-          }]).select('id').single();
-          
-          if (workoutError) throw workoutError;
-          
-          const exercisesToInsert = w.exercises.map((e: any, index: number) => ({
-            workout_id: workoutData.id,
-            day: w.day,
-            name: e.name,
-            sets: e.sets,
-            reps: e.reps,
-            rest: e.rest,
-            instructions: e.instructions,
-            muscles_worked: e.muscles_worked,
-            exercise_order: index
-          }));
-          
-          await supabase.from('exercises').insert(exercisesToInsert);
-        }
+        // Insert new workout plan
+        const { data: workoutData, error: workoutError } = await supabase.from('workouts').insert([{
+          user_id: userId,
+          type: 'Plano de Treino Semanal'
+        }]).select('id').single();
+        
+        if (workoutError) throw workoutError;
+        
+        const exercisesToInsert: any[] = [];
+        workoutPlan.workouts.forEach((w: any) => {
+          w.exercises.forEach((e: any, index: number) => {
+            exercisesToInsert.push({
+              workout_id: workoutData.id,
+              day: w.day,
+              name: e.name,
+              sets: e.sets,
+              reps: e.reps,
+              rest: e.rest,
+              instructions: e.instructions,
+              muscles_worked: e.muscles_worked,
+              exercise_order: index
+            });
+          });
+        });
+        
+        await supabase.from('exercises').insert(exercisesToInsert);
 
         // Refresh local state instead of reloading page
         setGenerating(false);
@@ -194,6 +205,113 @@ export default function WorkoutPage() {
 
   if (generating) return <LoadingScreen message="A IA está montando seu treino personalizado..." />;
 
+  const renderModals = () => (
+    <>
+      {/* Custom Confirmation Modal for Regenerate */}
+      <AnimatePresence>
+        {showRegenerateConfirm && (
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowRegenerateConfirm(false)} />
+                <motion.div 
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.9, opacity: 0 }}
+                    className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl relative z-10"
+                >
+                    <h3 className="font-bold text-xl text-gray-900 mb-2">Gerar Novo Treino?</h3>
+                    <p className="text-gray-600 mb-6 leading-relaxed">
+                        Isso criará uma nova ficha personalizada e substituirá a atual. Todo o histórico do treino atual será mantido, mas a ficha ativa mudará.
+                    </p>
+                    <div className="flex gap-3">
+                        <button 
+                            onClick={() => setShowRegenerateConfirm(false)}
+                            className="flex-1 py-3 font-bold text-gray-600 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
+                        >
+                            Cancelar
+                        </button>
+                        <button 
+                            onClick={confirmRegenerate}
+                            className="flex-1 py-3 font-bold text-white bg-blue-600 rounded-xl hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200"
+                        >
+                            Gerar Novo
+                        </button>
+                    </div>
+                </motion.div>
+            </div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Confirmation Modal for Finish */}
+      <AnimatePresence>
+        {showFinishConfirm && (
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowFinishConfirm(false)} />
+                <motion.div 
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.9, opacity: 0 }}
+                    className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl relative z-10"
+                >
+                    <h3 className="font-bold text-xl text-gray-900 mb-2">Concluir Treino?</h3>
+                    <p className="text-gray-600 mb-6 leading-relaxed">
+                        {completedExercises.size < (workout?.days.find((d: any) => d.name === selectedDay)?.exercises?.length || 0) 
+                            ? "Você ainda não marcou todos os exercícios como concluídos. Deseja finalizar mesmo assim?" 
+                            : "Parabéns por completar todos os exercícios! Deseja registrar este treino?"}
+                    </p>
+                    <div className="flex gap-3">
+                        <button 
+                            onClick={() => setShowFinishConfirm(false)}
+                            className="flex-1 py-3 font-bold text-gray-600 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
+                            disabled={finishing}
+                        >
+                            Voltar
+                        </button>
+                        <button 
+                            onClick={confirmFinishWorkout}
+                            disabled={finishing}
+                            className="flex-1 py-3 font-bold text-white bg-green-600 rounded-xl hover:bg-green-700 transition-colors shadow-lg shadow-green-200 flex justify-center items-center"
+                        >
+                            {finishing ? <RefreshCw className="animate-spin" size={20} /> : 'Finalizar'}
+                        </button>
+                    </div>
+                </motion.div>
+            </div>
+        )}
+      </AnimatePresence>
+
+      {/* Success Modal */}
+      <AnimatePresence>
+        {showSuccessModal && (
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+                <motion.div 
+                    initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                    animate={{ scale: 1, opacity: 1, y: 0 }}
+                    className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl relative z-10 text-center flex flex-col items-center"
+                >
+                    <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
+                        <Trophy size={40} className="text-green-600" />
+                    </div>
+                    <h3 className="font-black text-2xl text-gray-900 mb-3">Treino Concluído!</h3>
+                    <p className="text-gray-600 mb-8 leading-relaxed text-lg">
+                        {motivationMessage}
+                    </p>
+                    <button 
+                        onClick={() => {
+                            setShowSuccessModal(false);
+                            navigate('/');
+                        }}
+                        className="w-full py-4 font-bold text-white bg-gray-900 rounded-2xl hover:bg-black transition-transform active:scale-95 shadow-xl"
+                    >
+                        Voltar ao Início
+                    </button>
+                </motion.div>
+            </div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+
   if (!workout && !generating) return (
     <div className="p-6 flex flex-col items-center justify-center h-[80vh] text-center">
         <DumbbellIconLarge />
@@ -205,6 +323,7 @@ export default function WorkoutPage() {
         >
             <RefreshCw size={20} /> Gerar Meu Treino
         </button>
+        {renderModals()}
     </div>
   );
 
@@ -219,6 +338,9 @@ export default function WorkoutPage() {
   };
 
   const confirmFinishWorkout = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    
     if (!userId) {
         alert("Erro: Usuário não identificado.");
         return;
@@ -235,15 +357,15 @@ export default function WorkoutPage() {
 
         if (error) throw error;
         
-        const { data: user } = await supabase.from('users').select('*').eq('id', userId).single();
-        const motivation = await generateMotivation(user);
+        // Static motivation instead of AI generation
+        const motivation = "Treino concluído com sucesso! Continue assim para alcançar seus objetivos.";
         
-        setMotivationMessage(motivation || "Treino concluído com sucesso!");
+        setMotivationMessage(motivation);
         setShowFinishConfirm(false);
         setShowSuccessModal(true);
     } catch (error: any) {
         console.error('Error in handleFinishWorkout:', error);
-        alert(`Erro ao concluir treino: ${error.message}`);
+        toast.error(`Erro ao concluir treino: ${error.message || 'Erro desconhecido'}`);
     } finally {
         setFinishing(false);
     }
@@ -292,7 +414,6 @@ export default function WorkoutPage() {
       {/* Exercise List */}
       <div className="space-y-4 md:space-y-6">
         {currentDayExercises.map((ex: any, idx: number) => {
-            const videoSrc = getExerciseVideo(ex.name);
             const isExpanded = expandedExercise === idx;
             const isInstructionExpanded = expandedInstruction === idx;
             const isCompleted = completedExercises.has(idx);
@@ -331,15 +452,6 @@ export default function WorkoutPage() {
                         >
                             <Timer size={20} className="md:w-6 md:h-6" />
                         </button>
-                        <a 
-                            href={ex.video_url} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-red-600 bg-red-50 p-2 md:p-3 rounded-full hover:bg-red-100 transition-colors"
-                            title="Ver no YouTube"
-                        >
-                            <Youtube size={20} className="md:w-6 md:h-6" />
-                        </a>
                     </div>
                 </div>
                 
@@ -402,42 +514,29 @@ export default function WorkoutPage() {
                             exit={{ height: 0, opacity: 0, marginTop: 0 }}
                             className="overflow-hidden"
                         >
-                            <div className="relative w-full aspect-video bg-black rounded-xl md:rounded-2xl overflow-hidden group shadow-inner">
-                                {/* Simulated Video Player UI */}
+                            <div className="relative w-full aspect-video bg-gray-900 rounded-xl md:rounded-2xl overflow-hidden group shadow-inner cursor-pointer">
                                 <img 
-                                    src={videoSrc} 
-                                    alt={ex.name}
-                                    className="w-full h-full object-cover opacity-90"
-                                    loading="lazy"
+                                    src="https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=800&q=80" 
+                                    alt="Treino" 
+                                    className="w-full h-full object-cover opacity-50 group-hover:opacity-30 transition-opacity duration-300"
                                 />
-                                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                                    <div className="w-12 h-12 md:w-16 md:h-16 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
-                                        <Play size={20} className="text-white fill-white ml-1 md:w-8 md:h-8 md:ml-2" />
+                                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center">
+                                    <div className="bg-white/10 p-3 rounded-full backdrop-blur-sm mb-3 group-hover:scale-110 transition-transform duration-300">
+                                        <Youtube size={40} className="text-red-500 drop-shadow-lg" fill="currentColor" />
                                     </div>
+                                    <h4 className="font-bold text-white text-base md:text-lg drop-shadow-md">Ver Execução no YouTube</h4>
+                                    <p className="text-xs md:text-sm text-gray-200 mt-1 drop-shadow-md max-w-xs">
+                                        Aprenda a forma correta do exercício <span className="font-semibold text-white">"{ex.name}"</span>
+                                    </p>
                                 </div>
-                                
-                                {/* Controls Bar */}
-                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3 md:p-4 flex items-center justify-between">
-                                    <div className="flex items-center gap-2 md:gap-3">
-                                        <Play size={14} className="text-white fill-white md:w-5 md:h-5" />
-                                        <div className="h-1 md:h-1.5 w-24 md:w-32 bg-white/30 rounded-full overflow-hidden">
-                                            <div className="h-full w-1/3 bg-blue-500 rounded-full"></div>
-                                        </div>
-                                        <span className="text-[10px] md:text-xs text-white font-mono">0:05 / 0:15</span>
-                                    </div>
-                                    <div className="text-[10px] md:text-xs text-white/80 font-medium">
-                                        Demonstração
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="mt-2 md:mt-3 text-center">
                                 <a 
-                                    href={ex.video_url} 
-                                    target="_blank" 
+                                    href={`https://www.youtube.com/results?search_query=${encodeURIComponent(ex.name + ' exercício execução')}`}
+                                    target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-xs md:text-sm text-blue-600 hover:underline flex items-center justify-center gap-1 cursor-pointer relative z-10"
+                                    className="absolute inset-0 z-10"
+                                    title="Buscar no YouTube"
                                 >
-                                    <Youtube size={12} className="md:w-4 md:h-4" /> Ver vídeo completo no YouTube
+                                    <span className="sr-only">Buscar no YouTube</span>
                                 </a>
                             </div>
                         </motion.div>
@@ -596,7 +695,7 @@ export default function WorkoutPage() {
       
       {/* Debug Info - Remove in production */}
       <div className="fixed bottom-24 left-0 right-0 text-[10px] text-gray-300 text-center pointer-events-none">
-        Debug: Generating={generating ? 'true' : 'false'} | User={userId}
+        Debug: Generating={generating ? 'true' : 'false'}
       </div>
     </div>
   );

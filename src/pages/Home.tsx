@@ -1,98 +1,158 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Dumbbell, Flame, Trophy, AlertCircle, Settings, Activity, Scale, Percent, MessageCircle } from 'lucide-react';
+import { Dumbbell, Flame, Trophy, AlertCircle, Settings, Activity, Scale, Percent, User, Camera, X, Image as ImageIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import LoadingScreen from '../components/LoadingScreen';
 import { supabase } from '../db';
-import { generateAvatar, generateMotivation } from '../lib/gemini';
 
 import { toast } from 'sonner';
- 
-function BodyAvatar({ user, onAvatarGenerated }: { user: any, onAvatarGenerated: () => void }) {
-  const [generating, setGenerating] = useState(false);
- 
+
+const MOTIVATIONAL_QUOTES = [
+  "O único treino ruim é aquele que não aconteceu.",
+  "A dor de hoje é a força de amanhã.",
+  "Não pare quando estiver cansado, pare quando terminar.",
+  "Disciplina é escolher entre o que você quer agora e o que você mais quer.",
+  "Seu corpo pode suportar quase tudo. É a sua mente que você precisa convencer.",
+  "O sucesso começa onde a sua zona de conforto termina.",
+  "Pequenos progressos diários levam a grandes resultados.",
+  "Você não precisa ser extremo, apenas consistente.",
+  "Lembre-se de por que você começou.",
+  "Acredite em si mesmo e você será imparável."
+];
+
+function BodyAvatar({ user, onUpdateUser }: { user: any, onUpdateUser: (updatedUser: any) => void }) {
+  const [showAvatarModal, setShowAvatarModal] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
   if (!user) return null;
- 
-  const handleGenerateAvatar = async () => {
-    try {
-      setGenerating(true);
-      const avatarUrl = await generateAvatar(user);
-      const { error } = await supabase.from('users').update({ avatar_url: avatarUrl }).eq('id', user.id);
-      if (error) throw error;
-      
-      toast.success('Avatar gerado com sucesso!');
-      onAvatarGenerated();
-    } catch (err: any) {
-      if (err.message?.includes('429') || err.message?.includes('Quota')) {
-        toast.error('Limite de geração atingido.', {
-          description: 'Você pode configurar sua própria chave de API no menu lateral para continuar gerando imagens em alta qualidade.',
-          duration: 8000,
-          action: {
-            label: 'Tentar novamente',
-            onClick: () => handleGenerateAvatar(),
-          },
-        });
-      } else {
-        toast.error('Erro ao gerar avatar');
-      }
-    } finally {
-      setGenerating(false);
-    }
-  };
 
   const bmi = user.weight / (user.height * user.height);
   
-  let bodyType = 'médio';
-  if (bmi < 18.5) bodyType = 'magro';
-  else if (bmi >= 25) bodyType = 'gordo';
+  let bodyType = 'Peso Normal';
+  if (bmi < 18.5) bodyType = 'Abaixo do Peso';
+  else if (bmi >= 25) bodyType = 'Acima do Peso';
   
   if (user.goal === 'hypertrophy' && (user.experience === 'intermediate' || user.experience === 'advanced') && bmi >= 22) {
-    bodyType = 'forte';
+    bodyType = 'Atlético';
   }
 
-  let heightType = 'médio';
+  let heightType = 'Estatura Média';
   if (user.sex === 'male') {
-    if (user.height > 1.80) heightType = 'alto';
-    else if (user.height < 1.65) heightType = 'baixo';
+    if (user.height > 1.80) heightType = 'Estatura Alta';
+    else if (user.height < 1.65) heightType = 'Estatura Baixa';
   } else {
-    if (user.height > 1.70) heightType = 'alto';
-    else if (user.height < 1.55) heightType = 'baixo';
+    if (user.height > 1.70) heightType = 'Estatura Alta';
+    else if (user.height < 1.55) heightType = 'Estatura Baixa';
   }
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    try {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64String = reader.result as string;
+        
+        const { error } = await supabase.from('users').update({
+          avatar_url: base64String
+        }).eq('id', user.id);
+
+        if (error) throw error;
+
+        onUpdateUser({ ...user, avatar_url: base64String });
+        setShowAvatarModal(false);
+        toast.success("Foto de perfil atualizada!");
+      };
+      reader.readAsDataURL(file);
+    } catch (error: any) {
+      console.error("Error uploading avatar:", error);
+      toast.error("Erro ao atualizar foto de perfil.");
+    } finally {
+      setUploading(false);
+    }
+  };
 
   return (
-    <div className="flex flex-col items-center justify-center p-4 bg-white rounded-2xl md:rounded-3xl shadow-sm border border-gray-100">
-      <h3 className="font-bold text-gray-900 mb-4 w-full text-left">Seu Avatar</h3>
-      <div className="relative w-32 h-48 flex items-end justify-center overflow-hidden bg-gray-50 rounded-xl border border-gray-200 mb-4">
-        {user.avatar_url ? (
-          <img src={user.avatar_url} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full w-full p-2 text-center">
-            <span className="text-xs text-gray-400 mb-2">Sem avatar</span>
+    <>
+      <div className="flex flex-col items-center justify-center p-4 bg-white rounded-2xl md:rounded-3xl shadow-sm border border-gray-100">
+        <h3 className="font-bold text-gray-900 mb-4 w-full text-left">Seu Perfil</h3>
+        <div className="relative w-32 h-32 flex items-center justify-center overflow-hidden bg-blue-50 rounded-full border-4 border-white shadow-md mb-4 group">
+          {user.avatar_url ? (
+            <img src={user.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+          ) : (
+            <User size={64} className="text-blue-300" />
+          )}
+          <button 
+            onClick={() => setShowAvatarModal(true)}
+            className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <Camera size={24} className="text-white" />
+          </button>
+        </div>
+        <div className="flex flex-wrap justify-center gap-2">
+          <span className="text-[10px] md:text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-bold uppercase">{user.sex === 'male' ? 'Homem' : 'Mulher'}</span>
+          <span className="text-[10px] md:text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full font-bold uppercase">{heightType}</span>
+          <span className="text-[10px] md:text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-bold uppercase">{bodyType}</span>
+        </div>
+      </div>
+
+      {/* Avatar Modal */}
+      {showAvatarModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl relative"
+          >
             <button 
-              onClick={handleGenerateAvatar}
-              disabled={generating}
-              className="text-[10px] bg-indigo-600 text-white px-2 py-1 rounded-lg font-semibold disabled:opacity-50"
+              onClick={() => setShowAvatarModal(false)}
+              className="absolute top-4 right-4 p-2 text-gray-400 hover:text-gray-600 bg-gray-100 rounded-full"
             >
-              {generating ? 'Gerando...' : 'Gerar com IA'}
+              <X size={20} />
             </button>
-          </div>
-        )}
-      </div>
-      <div className="flex flex-wrap justify-center gap-2">
-        <span className="text-[10px] md:text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-bold uppercase">{user.sex === 'male' ? 'Homem' : 'Mulher'}</span>
-        <span className="text-[10px] md:text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full font-bold uppercase">{heightType}</span>
-        <span className="text-[10px] md:text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-bold uppercase">{bodyType}</span>
-      </div>
-      {user.avatar_url && (
-        <button 
-          onClick={handleGenerateAvatar}
-          disabled={generating}
-          className="mt-3 text-[10px] text-gray-500 underline disabled:opacity-50"
-        >
-          {generating ? 'Gerando novo...' : 'Gerar novo avatar'}
-        </button>
+            <h3 className="font-bold text-xl text-gray-900 mb-6 text-center">Foto de Perfil</h3>
+            
+            <div className="flex flex-col gap-4">
+              <label className="flex items-center justify-center gap-3 p-4 border-2 border-dashed border-blue-200 rounded-2xl cursor-pointer hover:bg-blue-50 transition-colors text-blue-600 font-semibold">
+                <ImageIcon size={24} />
+                {uploading ? 'Carregando...' : 'Escolher da Galeria'}
+                <input 
+                  type="file" 
+                  accept="image/*" 
+                  className="hidden" 
+                  onChange={handleFileChange}
+                  disabled={uploading}
+                />
+              </label>
+              
+              {user.avatar_url && (
+                <button 
+                  onClick={async () => {
+                    setUploading(true);
+                    try {
+                      await supabase.from('users').update({ avatar_url: null }).eq('id', user.id);
+                      onUpdateUser({ ...user, avatar_url: null });
+                      setShowAvatarModal(false);
+                      toast.success("Foto removida!");
+                    } catch (e) {
+                      toast.error("Erro ao remover foto.");
+                    } finally {
+                      setUploading(false);
+                    }
+                  }}
+                  disabled={uploading}
+                  className="p-4 text-red-600 font-semibold hover:bg-red-50 rounded-2xl transition-colors"
+                >
+                  Remover Foto Atual
+                </button>
+              )}
+            </div>
+          </motion.div>
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -188,17 +248,23 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
   const [stats, setStats] = useState({ workoutsCompletedMonth: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const userId = localStorage.getItem('userId');
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!userId) return;
-
     const loadData = async () => {
       try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const currentUserId = session?.user?.id;
+        
+        if (!currentUserId) return;
+
         // Fetch user
-        const { data: userData, error: userError } = await supabase.from('users').select('*').eq('id', userId).single();
-        if (userError || !userData) throw new Error('Falha ao carregar perfil');
+        const { data: userData, error: userError } = await supabase.from('users').select('*').eq('id', currentUserId).maybeSingle();
+        if (userError) throw new Error('Falha ao carregar perfil');
+        if (!userData) {
+          navigate('/onboarding');
+          return;
+        }
         setUser(userData);
 
         // Fetch stats
@@ -209,7 +275,7 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
             
             const { count } = await supabase.from('workout_history')
                 .select('*', { count: 'exact', head: true })
-                .eq('user_id', userId)
+                .eq('user_id', currentUserId)
                 .gte('completed_at', startOfMonth)
                 .lte('completed_at', endOfMonth);
             
@@ -218,33 +284,9 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
             console.error("Stats error", e);
         }
 
-        // Fetch motivation
-        try {
-            const cachedMotiv = sessionStorage.getItem(`motivation_${userId}`);
-            if (cachedMotiv) {
-                setMotivation(cachedMotiv);
-            } else {
-                const today = new Date().toISOString().split('T')[0];
-                const { data: cacheData } = await supabase.from('motivation_cache')
-                    .select('message')
-                    .eq('user_id', userId)
-                    .eq('date', today)
-                    .single();
-                
-                if (cacheData) {
-                    setMotivation(cacheData.message);
-                    sessionStorage.setItem(`motivation_${userId}`, cacheData.message);
-                } else {
-                    const motivMsg = await generateMotivation(userData);
-                    await supabase.from('motivation_cache').upsert({ user_id: userId, date: today, message: motivMsg });
-                    setMotivation(motivMsg);
-                    sessionStorage.setItem(`motivation_${userId}`, motivMsg);
-                }
-            }
-        } catch (e) {
-            console.error("Motivation error", e);
-            setMotivation("Vamos treinar hoje!");
-        }
+        // Fetch motivation (Static)
+        const todayIndex = new Date().getDate() % MOTIVATIONAL_QUOTES.length;
+        setMotivation(MOTIVATIONAL_QUOTES[todayIndex]);
 
       } catch (err) {
         console.error(err);
@@ -255,7 +297,7 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
     };
 
     loadData();
-  }, [userId]);
+  }, [navigate]);
 
   if (loading) return <LoadingScreen message="Preparando seu dashboard..." />;
   
@@ -289,19 +331,23 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
                 <Settings size={20} className="md:w-6 md:h-6" />
             </button>
             <button 
-                onClick={() => {
+                onClick={async () => {
                     if(confirm('Sair do aplicativo?')) {
-                        localStorage.removeItem('userId');
+                        await supabase.auth.signOut();
                         setUserId(null);
-                        navigate('/');
+                        navigate('/login');
                     }
                 }}
                 className="w-10 h-10 md:w-12 md:h-12 bg-gray-200 rounded-full overflow-hidden hover:ring-2 hover:ring-blue-500 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
                 aria-label="Perfil e Logout"
             >
-                <div className="w-full h-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-lg md:text-xl">
-                    {user.name[0].toUpperCase()}
-                </div>
+                {user.avatar_url ? (
+                  <img src={user.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-lg md:text-xl">
+                      {user.name[0].toUpperCase()}
+                  </div>
+                )}
             </button>
         </div>
       </header>
@@ -337,31 +383,23 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
                 </button>
               </div>
 
-              {/* Coach AI Teaser */}
-              <div className="bg-zinc-950 p-5 md:p-8 rounded-2xl md:rounded-3xl shadow-sm border border-zinc-800 hover:border-emerald-500/50 transition-colors cursor-pointer group flex flex-col justify-center relative overflow-hidden" onClick={() => navigate('/chat')}>
-                <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-full blur-3xl -mr-10 -mt-10"></div>
-                <div className="flex justify-between items-center mb-4 md:mb-6 relative z-10">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                        <MessageCircle className="w-5 h-5 text-emerald-400" />
-                      </div>
-                      <h3 className="font-bold text-white text-lg md:text-xl group-hover:text-emerald-400 transition-colors">Falar com o Coach</h3>
-                    </div>
+              {/* Nutrition Teaser */}
+              <div className="bg-white p-5 md:p-8 rounded-2xl md:rounded-3xl shadow-sm border border-gray-100 hover:border-green-200 transition-colors cursor-pointer group flex flex-col justify-center" onClick={() => navigate('/nutrition')}>
+                <div className="flex justify-between items-center mb-4 md:mb-6">
+                    <h3 className="font-bold text-gray-900 text-lg md:text-xl group-hover:text-green-600 transition-colors">Nutricionista IA</h3>
+                    <span className="text-xs md:text-sm bg-blue-100 text-blue-700 px-3 py-1.5 rounded-full font-medium flex items-center gap-2">
+                        Novo
+                    </span>
                 </div>
-                <p className="text-zinc-400 text-sm md:text-base mb-6 md:mb-8 relative z-10">Precisa de motivação? Faltou no treino? Converse com seu Coach IA para ajustar sua rotina, receber dicas de esportes ao ar livre e manter o foco.</p>
-                <button className="w-full text-center bg-emerald-500 text-white py-3 md:py-4 rounded-xl md:rounded-2xl font-medium md:font-bold md:text-lg group-hover:bg-emerald-600 transition-colors mt-auto relative z-10">
-                    Abrir Chat
+                <p className="text-gray-600 text-sm md:text-base mb-6 md:mb-8">Gere cardápios personalizados, marmitas congeladas e listas de compras com a nossa inteligência artificial.</p>
+                <button className="w-full text-center bg-green-600 text-white py-3 md:py-4 rounded-xl md:rounded-2xl font-medium md:font-bold md:text-lg hover:bg-green-700 transition-colors mt-auto">
+                    Acessar Nutrição
                 </button>
               </div>
 
               {/* Body Profile Section */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <BodyAvatar user={user} onAvatarGenerated={async () => {
-                    const { data: userData } = await supabase.from('users').select('*').eq('id', userId).single();
-                    if (userData) {
-                      setUser(userData);
-                    }
-                  }} />
+                  <BodyAvatar user={user} onUpdateUser={setUser} />
                   <BodyMetrics user={user} />
               </div>
           </div>
