@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Dumbbell, Flame, Trophy, AlertCircle, Settings, Activity, Scale, Percent, User, Camera, X, Image as ImageIcon } from 'lucide-react';
+import { Dumbbell, Flame, Trophy, AlertCircle, Settings, Activity, Scale, Percent, User, Camera, X, Image as ImageIcon, Target } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import LoadingScreen from '../components/LoadingScreen';
 import { supabase } from '../db';
@@ -242,10 +242,52 @@ function BodyMetrics({ user }: { user: any }) {
   );
 }
 
+function calculateMonthlyTarget(availabilityData: any) {
+  let availability: string[] = [];
+  if (typeof availabilityData === 'string') {
+    try {
+      availability = JSON.parse(availabilityData);
+    } catch (e) {
+      availability = [];
+    }
+  } else if (Array.isArray(availabilityData)) {
+    availability = availabilityData;
+  }
+
+  if (!availability || availability.length === 0) return 0;
+
+  const dayMap: Record<string, number> = {
+    'sunday': 0,
+    'monday': 1,
+    'tuesday': 2,
+    'wednesday': 3,
+    'thursday': 4,
+    'friday': 5,
+    'saturday': 6
+  };
+
+  const targetDays = availability.map(day => dayMap[day]).filter(d => d !== undefined);
+  
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  let count = 0;
+  for (let i = 1; i <= daysInMonth; i++) {
+    const date = new Date(year, month, i);
+    if (targetDays.includes(date.getDay())) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
 export default function HomePage({ setUserId }: { setUserId: (id: string | null) => void }) {
   const [motivation, setMotivation] = useState('');
   const [user, setUser] = useState<any>(null);
-  const [stats, setStats] = useState({ workoutsCompletedMonth: 0 });
+  const [stats, setStats] = useState({ workoutsCompletedMonth: 0, monthlyTarget: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const navigate = useNavigate();
@@ -279,7 +321,12 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
                 .gte('completed_at', startOfMonth)
                 .lte('completed_at', endOfMonth);
             
-            setStats({ workoutsCompletedMonth: count || 0 });
+            const monthlyTarget = calculateMonthlyTarget(userData.availability);
+
+            setStats({ 
+              workoutsCompletedMonth: count || 0,
+              monthlyTarget 
+            });
         } catch (e) {
             console.error("Stats error", e);
         }
@@ -407,18 +454,56 @@ export default function HomePage({ setUserId }: { setUserId: (id: string | null)
           <div className="space-y-6">
               {/* Quick Stats */}
               <div className="grid grid-cols-2 md:grid-cols-1 gap-4 md:gap-6">
-                <div className="bg-white p-4 md:p-6 rounded-2xl md:rounded-3xl shadow-sm border border-gray-100 flex flex-col justify-between h-28 md:h-36">
-                    <div className="flex items-center gap-2 text-gray-500">
-                        <div className="p-2 md:p-3 bg-green-50 text-green-600 rounded-lg md:rounded-xl">
-                            <Dumbbell size={18} className="md:w-6 md:h-6" />
+                
+                {/* Monthly Goal Card */}
+                <div className="bg-white p-4 md:p-6 rounded-2xl md:rounded-3xl shadow-sm border border-gray-100 flex flex-col justify-between col-span-2 md:col-span-1">
+                    <div className="flex items-center gap-2 text-gray-500 mb-4">
+                        <div className="p-2 md:p-3 bg-blue-50 text-blue-600 rounded-lg md:rounded-xl">
+                            <Target size={18} className="md:w-6 md:h-6" />
                         </div>
-                        <span className="text-xs md:text-sm font-bold uppercase tracking-wide">Treinos</span>
+                        <span className="text-xs md:text-sm font-bold uppercase tracking-wide">Meta do Mês</span>
                     </div>
-                    <div>
-                        <div className="text-2xl md:text-4xl font-bold text-gray-900">{stats.workoutsCompletedMonth}</div>
-                        <div className="text-xs md:text-sm text-gray-400 mt-1">Concluídos este mês</div>
-                    </div>
+                    
+                    {stats.monthlyTarget > 0 ? (
+                      <div>
+                        <div className="flex justify-between items-end mb-2">
+                            <div>
+                                <div className="text-2xl md:text-4xl font-bold text-gray-900">{stats.workoutsCompletedMonth}</div>
+                                <div className="text-xs md:text-sm text-gray-400 mt-1">Concluídos</div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-lg md:text-2xl font-bold text-gray-400">{stats.monthlyTarget}</div>
+                                <div className="text-xs md:text-sm text-gray-400 mt-1">Meta</div>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-4">
+                            <div className="w-full bg-gray-100 h-2 md:h-3 rounded-full overflow-hidden">
+                                <div 
+                                    className={`h-full rounded-full ${stats.workoutsCompletedMonth >= stats.monthlyTarget ? 'bg-green-500' : 'bg-blue-500'}`}
+                                    style={{ width: `${Math.min(100, (stats.workoutsCompletedMonth / stats.monthlyTarget) * 100)}%` }} 
+                                />
+                            </div>
+                            <div className="text-xs text-center mt-3 font-medium">
+                                {stats.workoutsCompletedMonth >= stats.monthlyTarget ? (
+                                  <span className="text-green-600 font-bold flex items-center justify-center gap-1">
+                                    <Trophy size={14} /> Meta batida! Você é incrível!
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-500">
+                                    Faltam {stats.monthlyTarget - stats.workoutsCompletedMonth} treinos para bater a meta
+                                  </span>
+                                )}
+                            </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-4 text-gray-500 text-sm">
+                        Defina seus dias de treino no perfil para ver sua meta.
+                      </div>
+                    )}
                 </div>
+
                 <div className="bg-white p-4 md:p-6 rounded-2xl md:rounded-3xl shadow-sm border border-gray-100 flex flex-col justify-between h-auto md:h-auto">
                     <div className="flex items-center gap-2 text-gray-500 mb-4">
                         <div className="p-2 md:p-3 bg-purple-50 text-purple-600 rounded-lg md:rounded-xl">

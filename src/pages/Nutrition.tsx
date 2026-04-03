@@ -20,6 +20,7 @@ export default function NutritionPage() {
     goal: 'weight_loss',
     mealType: 'fresh',
     days: 7,
+    restrictions: '',
   });
 
   useEffect(() => {
@@ -277,6 +278,18 @@ export default function NutritionPage() {
                 <option value={7}>7 Dias</option>
                 <option value={14}>14 Dias</option>
               </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Restrições Alimentares (Opcional)</label>
+              <input 
+                type="text"
+                placeholder="Ex: intolerância a lactose, sem glúten, não gosto de brócolis..."
+                value={preferences.restrictions}
+                onChange={(e) => setPreferences({...preferences, restrictions: e.target.value})}
+                className="w-full bg-gray-50 border border-gray-200 text-gray-900 text-sm rounded-xl focus:ring-green-500 focus:border-green-500 block p-3"
+              />
+              <p className="text-xs text-gray-500 mt-1">A IA irá excluir esses alimentos do seu cardápio.</p>
             </div>
 
             <button

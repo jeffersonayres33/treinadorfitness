@@ -67,12 +67,16 @@ export async function generateWorkout(user: any) {
 }
 
 export async function generateMealPlan(user: any, preferences: any) {
+  const userConstraints = user.constraints ? `Restrições médicas/gerais: ${user.constraints}. ` : '';
+  const specificRestrictions = preferences.restrictions ? `Alimentos a evitar/Restrições específicas: ${preferences.restrictions}. ` : '';
+  const allRestrictions = (userConstraints + specificRestrictions).trim() || 'Nenhuma';
+
   const prompt = `
     Crie um cardápio nutricional em JSON para:
     - Objetivo: ${preferences.goal || user.goal}
     - Tipo de Refeição: ${preferences.mealType} (ex: marmita congelada, fresca)
     - Dias: ${preferences.days} dias
-    - Restrições: ${user.constraints || 'Nenhuma'}
+    - Restrições: ${allRestrictions}
     - Peso atual: ${user.weight}kg
     - Altura: ${user.height}m
     
